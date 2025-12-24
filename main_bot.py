@@ -15,7 +15,7 @@ from config.constants import (
 )
 from database import init_db, close_db, video_record
 from database.models import VideoRecord
-from queue import init_redis, close_redis, job_queue
+from redis_queue import init_redis, close_redis, job_queue
 from validators import is_valid_terabox_link, normalize_terabox_url
 from uploader import multi_bot_manager, telegram_uploader
 from utils import log, setup_logger, check_user_subscription, get_force_subscribe_keyboard, get_force_subscribe_message
@@ -116,22 +116,25 @@ async def handle_message(message: Message):
             
             return
         
-        # New video - push job to queue
+        # Send processing message first
+        processing_msg = await message.answer(MSG_PROCESSING)
+        
+        # New video - push job to queue with processing message ID
         job_data = {
             'link': link,
             'user_id': message.from_user.id,
             'chat_id': message.chat.id,
             'message_id': message.message_id,
+            'processing_message_id': processing_msg.message_id,  # So worker can edit this message
             'link_hash': link_hash
         }
         
         success = await job_queue.push_job(job_data)
         
         if success:
-            await message.answer(MSG_PROCESSING)
             log.info(f"Job queued for user {message.from_user.id}: hash={link_hash}")
         else:
-            await message.answer(ERROR_PROCESSING)
+            await processing_msg.edit_text(ERROR_PROCESSING)
             log.error(f"Failed to queue job for user {message.from_user.id}")
         
     except Exception as e:
@@ -155,6 +158,15 @@ async def on_startup():
         
         # Initialize multi-bot manager for forwarding
         await multi_bot_manager.initialize()
+        
+        # Verify main bot can access log channel
+        try:
+            chat = await bot.get_chat(settings.log_channel_id)
+            log.info(f"✅ Main bot can access log channel: {chat.title}")
+        except Exception as e:
+            log.error(f"❌ Main bot CANNOT access log channel: {e}")
+            log.error(f"   Make sure main bot is admin of channel ID: {settings.log_channel_id}")
+            raise RuntimeError(f"Main bot cannot access log channel: {e}")
         
         log.info("Main bot server started successfully")
         

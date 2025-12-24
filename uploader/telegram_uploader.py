@@ -84,16 +84,23 @@ class TelegramUploader:
                     file_size=file_size
                 )
                 
-                # Forward to user
+                # Send to user from MAIN BOT (not worker bot) without forward attribution
                 try:
-                    await client.forward_messages(
+                    # Import main bot
+                    from aiogram import Bot
+                    main_bot = Bot(token=settings.main_bot_token)
+                    
+                    # Copy message instead of forwarding to remove "Forwarded from" attribution
+                    await main_bot.copy_message(
                         chat_id=job_data['chat_id'],
                         from_chat_id=settings.log_channel_id,
-                        message_ids=message.id
+                        message_id=message.id
                     )
-                    log.info(f"Video forwarded to user: user_id={job_data['user_id']}")
+                    
+                    await main_bot.session.close()
+                    log.info(f"Video sent to user from main bot: user_id={job_data['user_id']}")
                 except Exception as e:
-                    log.error(f"Error forwarding to user: {e}")
+                    log.error(f"Error sending to user: {e}")
                     # Still consider upload successful if saved to channel
                 
                 return True
@@ -121,41 +128,38 @@ class TelegramUploader:
         channel_message_id: int
     ) -> bool:
         """
-        Forward existing video from log channel to user.
+        Send existing video from log channel to user (without forward attribution).
         
         Args:
             chat_id: User's chat ID
             channel_message_id: Message ID in log channel
             
         Returns:
-            True if forwarded successfully, False otherwise
+            True if sent successfully, False otherwise
         """
         try:
-            # Get any available bot
-            bot_result = await multi_bot_manager.get_next_bot()
+            # Use MAIN BOT to send (not worker bot)
+            from aiogram import Bot
+            main_bot = Bot(token=settings.main_bot_token)
             
-            if bot_result is None:
-                log.error("No upload bots available for forwarding")
-                return False
+            log.info(f"Attempting to copy message {channel_message_id} from channel {settings.log_channel_id} to chat {chat_id}")
             
-            client, bot_index = bot_result
-            
-            # Forward message
-            await client.forward_messages(
+            # Copy message instead of forwarding to remove "Forwarded from" attribution
+            await main_bot.copy_message(
                 chat_id=chat_id,
                 from_chat_id=settings.log_channel_id,
-                message_ids=channel_message_id
+                message_id=channel_message_id
             )
             
-            log.info(f"Forwarded existing video to chat_id={chat_id}, msg_id={channel_message_id}")
+            await main_bot.session.close()
+            log.info(f"✅ Sent existing video to chat_id={chat_id}, msg_id={channel_message_id}")
             return True
             
-        except FloodWait as e:
-            log.warning(f"FloodWait on forward: {e.value}s")
-            # Could implement retry here, but for simplicity just fail
-            return False
         except Exception as e:
-            log.error(f"Error forwarding existing video: {e}")
+            log.error(f"❌ Error sending existing video: {e}")
+            log.error(f"   Channel ID: {settings.log_channel_id}")
+            log.error(f"   Message ID: {channel_message_id}")
+            log.error(f"   User Chat ID: {chat_id}")
             return False
 
 

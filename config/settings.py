@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     api_hash: str = Field("xxx", env='API_HASH')
     upload_bot_tokens: str = Field(..., env='UPLOAD_BOT_TOKENS')
     log_channel_id: int = Field(..., env='LOG_CHANNEL_ID')
-    force_subscribe_channel_id: int = Field(0, env='FORCE_SUBSCRIBE_CHANNEL_ID')  # Optional: 0 = disabled
+    force_subscribe_channel_id: str | int = Field('0', env='FORCE_SUBSCRIBE_CHANNEL_ID')  # Can be username (@channel) or ID (-100xxx)
     
     # Database Configuration
     mongodb_uri: str = Field('mongodb://localhost:27017', env='MONGODB_URI')

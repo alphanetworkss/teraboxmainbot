@@ -17,7 +17,7 @@ from config.constants import (
 )
 from database import init_db, close_db
 from database.models import video_record
-from queue import init_redis, close_redis, job_queue
+from redis_queue import init_redis, close_redis, job_queue
 from downloader import m3u8_parser, ffmpeg_helper
 from uploader import multi_bot_manager, telegram_uploader
 from utils import log, setup_logger, file_manager
@@ -31,20 +31,32 @@ worker_bot: Bot = None
 
 async def fetch_m3u8_from_api(link: str) -> str | None:
     """
-    Fetch M3U8 URL from external TeraBox API.
+    Fetch M3U8 URL from Starbots TeraBox API.
+    
+    API Response Format:
+    {
+        "errno": 0,
+        "data": {
+            "file": {
+                "file_name": "...",
+                "stream_url": "http://api.starbots.in/play/i/...",  # This is the M3U8 URL
+                "size": 123456,
+                ...
+            }
+        }
+    }
     
     Args:
         link: TeraBox link
         
     Returns:
-        M3U8 URL if successful, None otherwise
+        M3U8 URL (stream_url) if successful, None otherwise
     """
     try:
-        log.info(f"Fetching M3U8 URL from API: {link}")
+        log.info(f"Fetching M3U8 URL from Starbots API: {link}")
         
-        # Call external API
+        # Call Starbots API
         async with aiohttp.ClientSession() as session:
-            # Adjust this based on your actual API format
             params = {'url': link}
             
             async with session.get(
@@ -55,22 +67,26 @@ async def fetch_m3u8_from_api(link: str) -> str | None:
                 if response.status == 200:
                     data = await response.json()
                     
-                    # Extract M3U8 URL from response
-                    # Adjust this based on your API response structure
-                    m3u8_url = data.get('m3u8_url') or data.get('url') or data.get('video_url')
-                    
-                    if m3u8_url:
-                        log.info(f"Got M3U8 URL from API: {m3u8_url}")
-                        return m3u8_url
+                    # Check if API returned success
+                    if data.get('errno') == 0:
+                        # Extract stream_url from response
+                        stream_url = data.get('data', {}).get('file', {}).get('stream_url')
+                        
+                        if stream_url:
+                            log.info(f"Got M3U8 URL from Starbots API: {stream_url}")
+                            return stream_url
+                        else:
+                            log.error(f"No stream_url in API response: {data}")
+                            return None
                     else:
-                        log.error(f"No M3U8 URL in API response: {data}")
+                        log.error(f"API returned error: errno={data.get('errno')}, data={data}")
                         return None
                 else:
                     log.error(f"API request failed: status={response.status}")
                     return None
                     
     except Exception as e:
-        log.error(f"Error fetching M3U8 from API: {e}")
+        log.error(f"Error fetching M3U8 from Starbots API: {e}")
         return None
 
 
@@ -84,6 +100,39 @@ async def send_progress_message(chat_id: int, message_id: int, text: str):
         )
     except Exception as e:
         log.debug(f"Could not update progress message: {e}")
+
+
+def progress_bar(done, total, length=10):
+    """Create a visual progress bar."""
+    if not total or total <= 0:
+        import time
+        from math import floor
+        dots = int((time.time() * 2) % (length + 1))
+        return "⬢" * dots + "⬡" * (length - dots)
+    from math import floor
+    filled = min(length, floor(length * done / total))
+    return "⬢" * filled + "⬡" * (length - filled)
+
+
+def format_bytes(bytes_val):
+    """Format bytes to human readable format."""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if bytes_val < 1024.0:
+            return f"{bytes_val:.2f} {unit}"
+        bytes_val /= 1024.0
+    return f"{bytes_val:.2f} TB"
+
+
+def format_time(seconds):
+    """Format seconds to human readable time."""
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    elif seconds < 3600:
+        return f"{int(seconds // 60)}m {int(seconds % 60)}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        return f"{hours}h {minutes}m"
 
 
 async def process_job(job_data: Dict[str, Any]):
@@ -118,23 +167,67 @@ async def process_job(job_data: Dict[str, Any]):
             await worker_bot.send_message(chat_id, ERROR_DOWNLOAD_FAILED)
             return
         
+        # Use processing message ID from main bot
+        progress_message_id = job_data.get('processing_message_id', message_id)
+        
         # Step 3: Create temp file path
         file_path = await file_manager.create_temp_file(link_hash)
         
         # Step 4: Download video with ffmpeg
         log.info(f"Downloading video: {best_quality_url}")
         
-        # Progress callback for download
-        last_progress = [0]
+        # Progress tracking for download
+        import time
+        download_start_time = time.time()
+        last_update_time = [download_start_time]
+        last_downloaded = [0]
         
         async def download_progress(progress: int):
-            if progress - last_progress[0] >= 10:  # Update every 10%
-                last_progress[0] = progress
-                await send_progress_message(
-                    chat_id,
-                    message_id,
-                    MSG_DOWNLOADING.format(progress=progress)
-                )
+            """Enhanced download progress with speed and ETA."""
+            current_time = time.time()
+            
+            # Update every 3 seconds to avoid rate limits
+            if current_time - last_update_time[0] < 3:
+                return
+            
+            last_update_time[0] = current_time
+            
+            # Create progress bar
+            bar = progress_bar(progress, 100, length=10)
+            
+            # Calculate elapsed time and ETA
+            elapsed = current_time - download_start_time
+            if progress > 0 and progress < 100:
+                total_time = (elapsed / progress) * 100
+                remaining = total_time - elapsed
+                eta = format_time(remaining)
+            else:
+                eta = "Calculating..."
+            
+            # Format message
+            progress_text = (
+                "📥 **Downloading (Stream → MP4)**\n\n"
+                "╭━━━━❰Progress❱━➣\n"
+                f"┣⪼ [{bar}]\n"
+                f"┣⪼ ✅ Done: {progress}%\n"
+                f"┣⪼ ⏱️ Elapsed: {format_time(elapsed)}\n"
+                f"┣⪼ ⏳ ETA: {eta if progress < 100 else 'Finishing...'}\n"
+                "╰━━━━━━━━━━━━━━━➣"
+            )
+            
+            await send_progress_message(chat_id, progress_message_id, progress_text)
+        
+        # Send initial download message
+        await send_progress_message(
+            chat_id,
+            progress_message_id,
+            "📥 **Downloading (Stream → MP4)**\n\n"
+            "╭━━━━❰Progress❱━➣\n"
+            "┣⪼ [⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡]\n"
+            "┣⪼ ✅ Done: 0%\n"
+            "┣⪼ ⏱️ Starting download...\n"
+            "╰━━━━━━━━━━━━━━━➣"
+        )
         
         downloaded_file = await ffmpeg_helper.download_m3u8(
             m3u8_url=best_quality_url,
@@ -151,18 +244,57 @@ async def process_job(job_data: Dict[str, Any]):
         # Step 5: Upload to Telegram
         log.info(f"Uploading video to Telegram")
         
-        # Progress callback for upload
-        last_upload_progress = [0]
+        # Progress tracking for upload
+        upload_start_time = time.time()
+        last_upload_time = [upload_start_time]
         
         async def upload_progress(current: int, total: int):
-            progress = int((current / total) * 100)
-            if progress - last_upload_progress[0] >= 10:  # Update every 10%
-                last_upload_progress[0] = progress
-                await send_progress_message(
-                    chat_id,
-                    message_id,
-                    MSG_UPLOADING.format(progress=progress)
-                )
+            """Enhanced upload progress with speed and ETA."""
+            current_time = time.time()
+            
+            # Update every 3 seconds to avoid rate limits
+            if current_time - last_upload_time[0] < 3:
+                return
+            
+            last_upload_time[0] = current_time
+            
+            # Calculate progress
+            percent = (current / total * 100) if total > 0 else 0
+            bar = progress_bar(current, total, length=10)
+            
+            # Calculate speed
+            time_diff = current_time - upload_start_time
+            if time_diff > 0:
+                speed_bps = current / time_diff
+                speed = f"{format_bytes(speed_bps)}/s"
+                
+                # Calculate ETA
+                if speed_bps > 0 and total > current:
+                    remaining_bytes = total - current
+                    eta_seconds = remaining_bytes / speed_bps
+                    eta = format_time(eta_seconds)
+                else:
+                    eta = "Finishing..."
+            else:
+                speed = "Calculating..."
+                eta = "Calculating..."
+            
+            # Get file size
+            file_size_mb = total / 1024 / 1024
+            
+            # Format message
+            progress_text = (
+                f"📤 **Uploading to Telegram**\n\n"
+                "╭━━━━❰Progress❱━➣\n"
+                f"┣⪼ [{bar}]\n"
+                f"┣⪼ ✅ Uploaded: {percent:.2f}%\n"
+                f"┣⪼ 📦 Size: {file_size_mb:.2f} MB\n"
+                f"┣⪼ ⚡ Speed: {speed}\n"
+                f"┣⪼ ⏳ ETA: {eta if percent < 100 else 'Finishing...'}\n"
+                "╰━━━━━━━━━━━━━━━➣"
+            )
+            
+            await send_progress_message(chat_id, progress_message_id, progress_text)
         
         upload_success = await telegram_uploader.upload_video(
             file_path=downloaded_file,

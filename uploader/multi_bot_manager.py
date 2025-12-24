@@ -30,15 +30,20 @@ class MultiBotManager:
             
             log.info(f"Initializing {len(upload_tokens)} upload bot clients")
             
+            # Create sessions directory if it doesn't exist
+            import os
+            os.makedirs("sessions", exist_ok=True)
+            
             for i, token in enumerate(upload_tokens):
                 try:
-                    # Create Pyrogram client
+                    # Create Pyrogram client with in-memory session
                     client = Client(
                         name=f"upload_bot_{i}",
                         api_id=settings.api_id,
                         api_hash=settings.api_hash,
                         bot_token=token,
-                        workdir="sessions"  # Store sessions in sessions/ directory
+                        workdir="sessions",  # Store sessions in sessions/ directory
+                        in_memory=True  # Use in-memory session to avoid file permission issues
                     )
                     
                     # Start client
@@ -53,6 +58,7 @@ class MultiBotManager:
                     
                 except Exception as e:
                     log.error(f"Failed to initialize bot {i}: {e}")
+                    # Continue to next bot instead of failing completely
             
             if not self.clients:
                 raise RuntimeError("No upload bots initialized successfully")

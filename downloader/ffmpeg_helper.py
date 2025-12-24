@@ -50,13 +50,19 @@ class FFmpegHelper:
                 
                 log.info(f"Starting ffmpeg download: {m3u8_url} -> {output_path}")
                 
-                # FFmpeg command with stream copy
+                # FFmpeg command with optimized settings
                 cmd = [
                     'ffmpeg',
+                    '-y',  # Overwrite output file
+                    '-threads', '2',  # Reduced threads for stability
+                    '-user_agent', 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36',
                     '-i', m3u8_url,
                     '-c', 'copy',  # Stream copy (no re-encode)
                     '-bsf:a', 'aac_adtstoasc',  # Fix AAC bitstream
-                    '-y',  # Overwrite output file
+                    '-movflags', '+faststart',  # Enable fast start for streaming
+                    '-progress', 'pipe:1',  # Output progress to stdout
+                    '-loglevel', 'error',  # Only show errors
+                    '-timeout', '30000000',  # Increase timeout (30 seconds in microseconds)
                     str(output_path)
                 ]
                 

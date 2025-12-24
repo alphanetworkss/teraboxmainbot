@@ -20,14 +20,14 @@ async def check_user_subscription(bot: Bot, user_id: int) -> bool:
     Returns:
         True if subscribed or force subscribe disabled, False otherwise
     """
-    # If force subscribe is disabled (channel_id = 0), allow all users
-    if settings.force_subscribe_channel_id == 0:
+    # If force subscribe is disabled (channel_id = 0 or '0'), allow all users
+    if settings.force_subscribe_channel_id in [0, '0', '', None]:
         return True
     
     try:
         # Get user's membership status in the channel
         member = await bot.get_chat_member(
-            chat_id=settings.force_subscribe_channel_id,
+            chat_id=settings.force_subscribe_channel_id,  # Can be @username or -100xxx
             user_id=user_id
         )
         
@@ -53,23 +53,29 @@ async def get_force_subscribe_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardMarkup with join button
     """
     try:
-        # Get channel info to create invite link
-        bot = Bot(token=settings.main_bot_token)
-        chat = await bot.get_chat(settings.force_subscribe_channel_id)
+        channel_id = settings.force_subscribe_channel_id
         
-        # Create channel link
-        if chat.username:
-            channel_link = f"https://t.me/{chat.username}"
+        # If channel_id is a username (starts with @), use it directly
+        if isinstance(channel_id, str) and channel_id.startswith('@'):
+            channel_link = f"https://t.me/{channel_id[1:]}"  # Remove @ prefix
         else:
-            # For private channels, use invite link
-            channel_link = f"https://t.me/c/{str(settings.force_subscribe_channel_id)[4:]}"
+            # It's a numeric ID, get channel info
+            bot = Bot(token=settings.main_bot_token)
+            chat = await bot.get_chat(channel_id)
+            
+            if chat.username:
+                channel_link = f"https://t.me/{chat.username}"
+            else:
+                # For private channels, use invite link
+                channel_link = f"https://t.me/c/{str(channel_id)[4:]}"
+            
+            await bot.session.close()
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📢 Join Channel", url=channel_link)],
             [InlineKeyboardButton(text="✅ I Joined", callback_data="check_subscription")]
         ])
         
-        await bot.session.close()
         return keyboard
         
     except Exception as e:

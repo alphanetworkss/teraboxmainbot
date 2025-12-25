@@ -5,7 +5,7 @@ Handles job push/consume operations for download tasks.
 import json
 import asyncio
 from typing import Callable, Optional, Dict, Any
-from redis_queue.redis_client import get_redis
+from .redis_client import get_redis
 from config.constants import QUEUE_DOWNLOAD_JOBS, WORKER_POLL_INTERVAL
 from utils.logger import log
 

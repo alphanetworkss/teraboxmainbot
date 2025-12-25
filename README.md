@@ -110,7 +110,7 @@ REDIS_HOST=localhost
 REDIS_PORT=6379
 
 # TeraBox API
-TERABOX_API_URL=https://your-api-endpoint.com/extract
+TERABOX_API_URL=https://api.starbots.in/api/terabox
 
 # Worker settings
 MAX_CONCURRENT_DOWNLOADS=3

@@ -5,12 +5,14 @@ Handles video upload to log channel and forwarding to users.
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 from pyrogram import Client
-from pyrogram.errors import FloodWait
+from pyrogram.errors import FloodWait, PeerIdInvalid, ChannelPrivate, ChatWriteForbidden
 from pyrogram.types import Message
 from uploader.multi_bot_manager import multi_bot_manager
 from database.models import video_record
 from config.settings import settings
 from utils.logger import log
+from utils.progress_tracker import progress_logger
+from uploader.chat_validator import validate_chat_access, format_validation_error
 
 
 class TelegramUploader:
@@ -60,7 +62,47 @@ class TelegramUploader:
                 
                 client, bot_index = bot_result
                 
-                log.info(f"Uploading video using bot {bot_index}: {file_path.name}")
+                # Get file size for logging
+                file_size = file_path.stat().st_size
+                
+                # Log upload start
+                progress_logger.log_upload_start(
+                    job_data['link_hash'],
+                    bot_index,
+                    file_size
+                )
+                
+                log.info(f"Uploading video using bot {bot_index} ({multi_bot_manager.bot_usernames[bot_index]}): {file_path.name}")
+                
+                # CRITICAL: Validate bot has access to channel BEFORE upload
+                is_valid, error_reason, chat_info = await validate_chat_access(
+                    client,
+                    settings.log_channel_id,
+                    bot_index
+                )
+                
+                if not is_valid:
+                    # Bot doesn't have access - mark as invalid and try next bot
+                    bot_username = multi_bot_manager.bot_usernames[bot_index]
+                    error_msg = format_validation_error(
+                        bot_index=bot_index,
+                        bot_username=bot_username,
+                        chat_id=settings.log_channel_id,
+                        error_type="PEER_VALIDATION_FAILED",
+                        error_message=error_reason,
+                        job_id=job_data['link_hash']
+                    )
+                    log.error(error_msg)
+                    
+                    # Mark bot as invalid for channel
+                    await multi_bot_manager.mark_invalid_for_channel(bot_index)
+                    
+                    # Try next bot
+                    retry_count += 1
+                    continue
+                
+                # Bot has access - proceed with upload
+                log.info(f"Bot {bot_index} validated for channel access, proceeding with upload")
                 
                 # Upload to log channel
                 message: Message = await client.send_video(
@@ -72,7 +114,8 @@ class TelegramUploader:
                 
                 log.info(f"Video uploaded to log channel: message_id={message.id}")
                 
-                # Get file size
+                # Get file size and calculate upload duration
+                import time
                 file_size = file_path.stat().st_size
                 
                 # Save to MongoDB
@@ -99,6 +142,15 @@ class TelegramUploader:
                     
                     await main_bot.session.close()
                     log.info(f"Video sent to user from main bot: user_id={job_data['user_id']}")
+                    
+                    # Log upload completion (note: duration calculation would require tracking start time)
+                    # For now, we log completion without duration
+                    progress_logger.log_upload_complete(
+                        job_data['link_hash'],
+                        0,  # Duration not tracked here, logged in worker
+                        bot_index,
+                        file_size
+                    )
                 except Exception as e:
                     log.error(f"Error sending to user: {e}")
                     # Still consider upload successful if saved to channel
@@ -108,15 +160,61 @@ class TelegramUploader:
             except FloodWait as e:
                 log.warning(f"FloodWait error on bot {bot_index}: wait {e.value}s")
                 
-                # Mark bot as unavailable
+                # Mark bot as unavailable temporarily
                 await multi_bot_manager.mark_unavailable(bot_index, e.value)
                 
                 # Retry with next bot
                 retry_count += 1
                 log.info(f"Retrying upload with next bot (attempt {retry_count}/{max_retries})")
+            
+            except (PeerIdInvalid, ChannelPrivate, ChatWriteForbidden) as e:
+                # Peer errors - bot doesn't have access to channel
+                bot_username = multi_bot_manager.bot_usernames[bot_index] if bot_index < len(multi_bot_manager.bot_usernames) else f"Bot_{bot_index}"
                 
+                error_msg = format_validation_error(
+                    bot_index=bot_index,
+                    bot_username=bot_username,
+                    chat_id=settings.log_channel_id,
+                    error_type=type(e).__name__.upper(),
+                    error_message=str(e),
+                    job_id=job_data['link_hash']
+                )
+                log.error(error_msg)
+                
+                # Mark bot as permanently invalid for this channel
+                await multi_bot_manager.mark_invalid_for_channel(bot_index)
+                
+                # Log to progress tracker
+                progress_logger.log_upload_error(
+                    job_data['link_hash'],
+                    f"{type(e).__name__}: {str(e)}",
+                    bot_index
+                )
+                
+                # Retry with next bot
+                retry_count += 1
+                log.info(f"Retrying upload with next bot (attempt {retry_count}/{max_retries})")
+                
+            
             except Exception as e:
-                log.error(f"Error uploading video: {e}")
+                # Generic error - log and retry
+                bot_username = multi_bot_manager.bot_usernames[bot_index] if bot_index < len(multi_bot_manager.bot_usernames) else f"Bot_{bot_index}"
+                
+                log.error(
+                    f"[UPLOAD] ERROR | "
+                    f"bot_index={bot_index} | "
+                    f"bot_username={bot_username} | "
+                    f"error={type(e).__name__} | "
+                    f"message={str(e)} | "
+                    f"job_id={job_data['link_hash'][:16]}"
+                )
+                
+                progress_logger.log_upload_error(
+                    job_data['link_hash'],
+                    str(e),
+                    bot_index
+                )
+                
                 retry_count += 1
         
         log.error(f"Failed to upload video after {max_retries} retries")

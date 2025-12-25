@@ -6,7 +6,8 @@ Based on your Redis Cloud database screenshot, here's how to configure your `.en
 
 - **Database name**: starbots
 - **Database ID**: #13852050
-- **Public endpoint**: redis-16569.c212.ap-south-1-1.ec2.redislabs.com:16569
+- **Public endpoint**: redis-16569.c212.ap-south-1-1.ec2.cloud.redislabs.com:16569
+- **Connection URL**: `redis://default:password@redis-16569.c212.ap-south-1-1.ec2.cloud.redislabs.com:16569`
 
 ## Configuration Steps
 
@@ -26,7 +27,7 @@ Edit your `.env` file in the `terabox_bot_system` directory:
 ```env
 # ===== REDIS CONFIGURATION =====
 # Redis Cloud connection
-REDIS_HOST=redis-16569.c212.ap-south-1-1.ec2.redislabs.com
+REDIS_HOST=redis-16569.c212.ap-south-1-1.ec2.cloud.redislabs.com
 REDIS_PORT=16569
 REDIS_DB=0
 REDIS_PASSWORD=your_redis_password_here

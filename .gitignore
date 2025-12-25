@@ -1,0 +1,41 @@
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environment
+
+.venv
+venv/
+ENV/
+
+# Pyrogram sessions
+sessions/
+*.session
+*.session-journal
+
+# Downloads
+downloads/
+*.mp4
+*.mkv
+*.avi
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Distribution
+dist/
+build/
+*.egg-info/

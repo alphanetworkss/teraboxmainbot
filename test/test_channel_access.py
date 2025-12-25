@@ -4,7 +4,7 @@ from aiogram import Bot
 # Test if main bot can access the log channel
 async def test_channel_access():
     # Replace with your actual values
-    MAIN_BOT_TOKEN = "7622285251:AAEV_WICBEggKgKclypxinORCbJRBRR3MrI"
+    MAIN_BOT_TOKEN = "your_main_bot_token"
     LOG_CHANNEL_ID = -1002813604442
     
     bot = Bot(token=MAIN_BOT_TOKEN)

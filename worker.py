@@ -21,6 +21,13 @@ from redis_queue import init_redis, close_redis, job_queue
 from downloader import m3u8_parser, ffmpeg_helper
 from uploader import multi_bot_manager, telegram_uploader
 from utils import log, setup_logger, file_manager
+from utils.progress_tracker import (
+    rate_limiter,
+    progress_logger,
+    progress_bar,
+    format_time,
+    format_bytes
+)
 from aiogram import Bot
 
 
@@ -102,37 +109,7 @@ async def send_progress_message(chat_id: int, message_id: int, text: str):
         log.debug(f"Could not update progress message: {e}")
 
 
-def progress_bar(done, total, length=10):
-    """Create a visual progress bar."""
-    if not total or total <= 0:
-        import time
-        from math import floor
-        dots = int((time.time() * 2) % (length + 1))
-        return "⬢" * dots + "⬡" * (length - dots)
-    from math import floor
-    filled = min(length, floor(length * done / total))
-    return "⬢" * filled + "⬡" * (length - filled)
-
-
-def format_bytes(bytes_val):
-    """Format bytes to human readable format."""
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if bytes_val < 1024.0:
-            return f"{bytes_val:.2f} {unit}"
-        bytes_val /= 1024.0
-    return f"{bytes_val:.2f} TB"
-
-
-def format_time(seconds):
-    """Format seconds to human readable time."""
-    if seconds < 60:
-        return f"{int(seconds)}s"
-    elif seconds < 3600:
-        return f"{int(seconds // 60)}m {int(seconds % 60)}s"
-    else:
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        return f"{hours}h {minutes}m"
+# Removed: progress_bar, format_bytes, format_time now imported from utils.progress_tracker
 
 
 async def process_job(job_data: Dict[str, Any]):
@@ -176,56 +153,54 @@ async def process_job(job_data: Dict[str, Any]):
         # Step 4: Download video with ffmpeg
         log.info(f"Downloading video: {best_quality_url}")
         
+        # Log download start
+        progress_logger.log_download_start(link_hash, best_quality_url)
+        
         # Progress tracking for download
         import time
         download_start_time = time.time()
-        last_update_time = [download_start_time]
-        last_downloaded = [0]
+        last_logged_milestone = [0]  # Track logging milestones (25%, 50%, 75%)
         
-        async def download_progress(progress: int):
-            """Enhanced download progress with speed and ETA."""
-            current_time = time.time()
+        async def download_progress(progress_data: dict):
+            """Enhanced download progress with real ffmpeg data."""
+            percentage = progress_data.get('percentage', 0)
+            download_speed = progress_data.get('download_speed', 'Calculating...')
+            eta = progress_data.get('eta', 'Calculating...')
             
-            # Update every 3 seconds to avoid rate limits
-            if current_time - last_update_time[0] < 3:
+            # Rate limiting for Telegram message updates
+            if not await rate_limiter.should_update(link_hash):
                 return
             
-            last_update_time[0] = current_time
+            # Create progress bar (10 chars as shown in example)
+            bar = progress_bar.generate(percentage, length=10)
             
-            # Create progress bar
-            bar = progress_bar(progress, 100, length=10)
-            
-            # Calculate elapsed time and ETA
-            elapsed = current_time - download_start_time
-            if progress > 0 and progress < 100:
-                total_time = (elapsed / progress) * 100
-                remaining = total_time - elapsed
-                eta = format_time(remaining)
-            else:
-                eta = "Calculating..."
-            
-            # Format message
+            # Format message with download speed in MB/s
             progress_text = (
                 "📥 **Downloading (Stream → MP4)**\n\n"
-                "╭━━━━❰Progress❱━➣\n"
-                f"┣⪼ [{bar}]\n"
-                f"┣⪼ ✅ Done: {progress}%\n"
-                f"┣⪼ ⏱️ Elapsed: {format_time(elapsed)}\n"
-                f"┣⪼ ⏳ ETA: {eta if progress < 100 else 'Finishing...'}\n"
+                "╭━━━━❰Progress❱━━━━➣\n"
+                f"┣⪼ [{bar}] {percentage:.1f}%\n"
+                f"┣⪼ 🚀 Speed: {download_speed}\n"
+                f"┣⪼ ⏱️ ETA: {eta}\n"
                 "╰━━━━━━━━━━━━━━━➣"
             )
             
             await send_progress_message(chat_id, progress_message_id, progress_text)
+            
+            # Structured logging at milestones
+            current_milestone = int(percentage // 25) * 25
+            if current_milestone > last_logged_milestone[0] and current_milestone > 0:
+                progress_logger.log_download_progress(link_hash, percentage, download_speed, eta)
+                last_logged_milestone[0] = current_milestone
         
         # Send initial download message
         await send_progress_message(
             chat_id,
             progress_message_id,
             "📥 **Downloading (Stream → MP4)**\n\n"
-            "╭━━━━❰Progress❱━➣\n"
-            "┣⪼ [⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡]\n"
-            "┣⪼ ✅ Done: 0%\n"
-            "┣⪼ ⏱️ Starting download...\n"
+            "╭━━━━❰Progress❱━━━━➣\n"
+            f"┣⪼ [{progress_bar.generate(0, 10)}] 0%\n"
+            "┣⪼ 🚀 Speed: Initializing...\n"
+            "┣⪼ ⏱️ ETA: Calculating...\n"
             "╰━━━━━━━━━━━━━━━➣"
         )
         
@@ -236,8 +211,14 @@ async def process_job(job_data: Dict[str, Any]):
         )
         
         if not downloaded_file:
+            progress_logger.log_download_error(link_hash, "Download failed")
             await worker_bot.send_message(chat_id, ERROR_DOWNLOAD_FAILED)
             return
+        
+        # Log download completion
+        download_duration = time.time() - download_start_time
+        file_size = downloaded_file.stat().st_size
+        progress_logger.log_download_complete(link_hash, download_duration, file_size)
         
         log.info(f"Download completed: {downloaded_file}")
         
@@ -246,23 +227,21 @@ async def process_job(job_data: Dict[str, Any]):
         
         # Progress tracking for upload
         upload_start_time = time.time()
-        last_upload_time = [upload_start_time]
+        last_upload_milestone = [0]
+        upload_job_id = f"{link_hash}_upload"
         
         async def upload_progress(current: int, total: int):
             """Enhanced upload progress with speed and ETA."""
-            current_time = time.time()
-            
-            # Update every 3 seconds to avoid rate limits
-            if current_time - last_upload_time[0] < 3:
+            # Rate limiting for Telegram message updates
+            if not await rate_limiter.should_update(upload_job_id):
                 return
-            
-            last_upload_time[0] = current_time
             
             # Calculate progress
             percent = (current / total * 100) if total > 0 else 0
-            bar = progress_bar(current, total, length=10)
+            bar = progress_bar.generate(percent, length=10)
             
             # Calculate speed
+            current_time = time.time()
             time_diff = current_time - upload_start_time
             if time_diff > 0:
                 speed_bps = current / time_diff
@@ -279,22 +258,28 @@ async def process_job(job_data: Dict[str, Any]):
                 speed = "Calculating..."
                 eta = "Calculating..."
             
-            # Get file size
-            file_size_mb = total / 1024 / 1024
+            # Format bytes
+            current_mb = current / (1024 * 1024)
+            total_mb = total / (1024 * 1024)
             
             # Format message
             progress_text = (
-                f"📤 **Uploading to Telegram**\n\n"
-                "╭━━━━❰Progress❱━➣\n"
-                f"┣⪼ [{bar}]\n"
-                f"┣⪼ ✅ Uploaded: {percent:.2f}%\n"
-                f"┣⪼ 📦 Size: {file_size_mb:.2f} MB\n"
-                f"┣⪼ ⚡ Speed: {speed}\n"
-                f"┣⪼ ⏳ ETA: {eta if percent < 100 else 'Finishing...'}\n"
+                "📤 **Uploading to Channel**\n\n"
+                "╭━━━━❰Progress❱━━━━➣\n"
+                f"┣⪼ [{bar}] {percent:.1f}%\n"
+                f"┣⪼ 📦 Uploaded: {current_mb:.1f}MB / {total_mb:.1f}MB\n"
+                f"┣⪼ 🚀 Speed: {speed}\n"
+                f"┣⪼ ⏱️ ETA: {eta}\n"
                 "╰━━━━━━━━━━━━━━━➣"
             )
             
             await send_progress_message(chat_id, progress_message_id, progress_text)
+            
+            # Structured logging at milestones
+            current_milestone = int(percent // 25) * 25
+            if current_milestone > last_upload_milestone[0] and current_milestone > 0:
+                # Note: bot_index will be logged in telegram_uploader
+                last_upload_milestone[0] = current_milestone
         
         upload_success = await telegram_uploader.upload_video(
             file_path=downloaded_file,
@@ -303,8 +288,13 @@ async def process_job(job_data: Dict[str, Any]):
         )
         
         if not upload_success:
+            progress_logger.log_upload_error(link_hash, "Upload failed", bot_index=0)
             await worker_bot.send_message(chat_id, ERROR_UPLOAD_FAILED)
             return
+        
+        # Cleanup rate limiter
+        rate_limiter.reset(link_hash)
+        rate_limiter.reset(upload_job_id)
         
         log.info(f"Upload completed for user {user_id}")
         
@@ -350,6 +340,26 @@ async def on_startup():
         
         # Initialize multi-bot manager for uploads
         await multi_bot_manager.initialize()
+        
+        # CRITICAL: Validate all upload bots have access to log channel
+        log.info("=" * 60)
+        log.info("Validating upload bots access to log channel...")
+        log.info("=" * 60)
+        
+        valid_bot_count = await multi_bot_manager.validate_channel_access(settings.log_channel_id)
+        
+        if valid_bot_count == 0:
+            log.error("❌ CRITICAL ERROR: NO upload bots have access to log channel!")
+            log.error(f"   Channel ID: {settings.log_channel_id}")
+            log.error("   Action required:")
+            log.error("   1. Add all upload bots to the channel")
+            log.error("   2. Grant them admin permissions (or at least 'Post Messages')")
+            log.error("   3. Restart the worker")
+            raise RuntimeError("No valid upload bots - cannot start worker")
+        
+        log.info("=" * 60)
+        log.info(f"✅ Upload bot validation complete: {valid_bot_count} bot(s) ready")
+        log.info("=" * 60)
         
         # Initialize worker bot for sending messages
         worker_bot = Bot(token=settings.main_bot_token)

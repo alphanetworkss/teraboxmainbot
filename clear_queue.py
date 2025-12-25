@@ -22,6 +22,7 @@ async def clear_all_jobs():
         
         if queue_size == 0:
             log.info("Queue is already empty!")
+            print("✅ Queue is already empty!")
             return
         
         # Confirm before clearing
@@ -47,6 +48,10 @@ async def clear_all_jobs():
     except Exception as e:
         log.error(f"Error clearing queue: {e}")
         print(f"❌ Error: {e}")
+    finally:
+        # Properly close Redis connection
+        from redis_queue.redis_client import close_redis
+        await close_redis()
 
 
 if __name__ == "__main__":

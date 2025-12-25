@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     max_concurrent_downloads: int = Field(3, env='MAX_CONCURRENT_DOWNLOADS')
     download_dir: str = Field('./downloads', env='DOWNLOAD_DIR')
     
+    # CPU Throttling Configuration
+    cpu_high_threshold: float = Field(75.0, env='CPU_HIGH_THRESHOLD')
+    cpu_high_duration: int = Field(5, env='CPU_HIGH_DURATION')
+    
+    # Active Limits Configuration
+    global_active_limit_max: int = Field(10, env='GLOBAL_ACTIVE_LIMIT_MAX')
+    upload_active_limit_max: int = Field(10, env='UPLOAD_ACTIVE_LIMIT_MAX')
+    
     # Logging
     log_level: str = Field('INFO', env='LOG_LEVEL')
     log_file_max_size: str = Field('100MB', env='LOG_FILE_MAX_SIZE')

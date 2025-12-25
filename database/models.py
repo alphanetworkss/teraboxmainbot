@@ -108,8 +108,16 @@ class VideoRecord:
             return True
             
         except Exception as e:
-            log.error(f"Error saving video record: {e}")
-            return False
+            # Check if it's a duplicate key error (E11000)
+            error_str = str(e)
+            if 'E11000' in error_str or 'duplicate key' in error_str.lower():
+                # This is expected when same link is processed simultaneously
+                log.warning(f"Duplicate video record (race condition): hash={link_hash}")
+                return True  # Still return True since video is already saved
+            else:
+                # Actual error
+                log.error(f"Error saving video record: {e}")
+                return False
     
     async def get_message_id(self, link_hash: str) -> Optional[int]:
         """

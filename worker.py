@@ -472,9 +472,25 @@ async def process_job(job_data: Dict[str, Any]):
             pass
     
     finally:
-        # Step 6: Cleanup - delete file
-        if file_path:
-            await file_manager.cleanup_file(file_path)
+        # Step 6: Cleanup - delete ALL temporary files
+        # This includes the final video file that was uploaded
+        try:
+            # Track which file was actually uploaded
+            file_to_cleanup = None
+            
+            # Check if we have downloaded_file (the final video with thumbnail)
+            if 'downloaded_file' in locals() and downloaded_file:
+                file_to_cleanup = downloaded_file
+            elif 'file_path' in locals() and file_path:
+                # Fallback to original file_path
+                file_to_cleanup = file_path
+            
+            # Delete the uploaded file
+            if file_to_cleanup:
+                await file_manager.cleanup_file(file_to_cleanup)
+                
+        except Exception as e:
+            log.error(f"Error during final cleanup: {e}")
 
 
 async def job_consumer():

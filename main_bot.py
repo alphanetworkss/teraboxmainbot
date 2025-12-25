@@ -76,15 +76,19 @@ async def callback_check_subscription(callback: CallbackQuery):
     """Handle subscription check callback."""
     if await check_user_subscription(bot, callback.from_user.id):
         welcome_text = (
-            "✨ **Welcome to TeraBox Downloader Bot** ✨\n\n"
-            "📥 Send me a **TeraBox link** and I'll handle the rest.\n\n"
-            "🎬 You'll get:\n"
-            "• High quality videos\n"
-            "• Fast download & upload\n"
-            "• Clean progress updates\n\n"
-            "⚡ Powered by **@Thestarbots**"
+        "✨ **Welcome to TeraBox Downloader Bot** ✨\n\n"
+        "📥 Send me a **TeraBox link** and I'll download & upload the video for you.\n\n"
+        "✅ **Supported link formats**\n"
+        "• Links containing `/s/`\n"
+        "• Links containing `?surl=`\n\n"
+        "⚡ Fast • Reliable • Free\n"
+        "🚀 Powered by **@Thestarbots**"
         )
-        await callback.message.edit_text(welcome_text, parse_mode="Markdown")
+        welcome_photo = getattr(settings, 'welcome_photo_url', None)
+        if welcome_photo:
+            await callback.message.edit_photo(photo=welcome_photo, caption=welcome_text, parse_mode="Markdown")
+        else:
+            await callback.message.edit_text(welcome_text, parse_mode="Markdown")
     else:
         await callback.answer("❌ You haven't joined the channel yet!", show_alert=True)
     await callback.answer()

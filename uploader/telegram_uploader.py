@@ -172,6 +172,7 @@ class TelegramUploader:
                     chat_id=settings.log_channel_id,
                     video=str(file_path),
                     caption=caption,
+                    parse_mode="Markdown",  # Enable markdown formatting for bold text
                     supports_streaming=True,  # Enable streaming for better playback
                     progress=progress_callback
                 )

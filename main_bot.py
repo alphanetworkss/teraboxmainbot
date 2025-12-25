@@ -85,13 +85,32 @@ async def callback_check_subscription(callback: CallbackQuery):
         "🚀 Powered by <b>@Thestarbots</b>"
         )
         welcome_photo = getattr(settings, 'welcome_photo_url', None)
+        
+        # Delete the old message first
+        try:
+            await callback.message.delete()
+        except Exception as e:
+            log.debug(f"Could not delete old message: {e}")
+        
+        # Send new welcome message
         if welcome_photo:
-            await callback.message.edit_photo(photo=welcome_photo, caption=welcome_text, parse_mode="HTML")
+            await bot.send_photo(
+                chat_id=callback.message.chat.id,
+                photo=welcome_photo,
+                caption=welcome_text,
+                parse_mode="HTML"
+            )
         else:
-            await callback.message.edit_text(welcome_text, parse_mode="HTML")
+            await bot.send_message(
+                chat_id=callback.message.chat.id,
+                text=welcome_text,
+                parse_mode="HTML"
+            )
     else:
         await callback.answer("❌ You haven't joined the channel yet!", show_alert=True)
+    
     await callback.answer()
+
 
 
 @dp.message(F.text)

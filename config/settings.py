@@ -46,6 +46,7 @@ class Settings(BaseSettings):
         env_file = '.env'
         env_file_encoding = 'utf-8'
         case_sensitive = False
+        extra = 'ignore'  # Ignore extra environment variables not defined in the model
     
     @validator('upload_bot_tokens')
     def parse_upload_tokens(cls, v):

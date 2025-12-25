@@ -40,13 +40,13 @@ async def cmd_start(message: Message):
     
     # Premium welcome message
     welcome_caption = (
-        "✨ **Welcome to TeraBox Downloader Bot** ✨\n\n"
-        "📥 Send me a **TeraBox link** and I'll download & upload the video for you.\n\n"
-        "✅ **Supported link formats**\n"
+        "✨ <b>Welcome to TeraBox Downloader Bot</b> ✨\n\n"
+        "📥 Send me a <b>TeraBox link</b> and I'll download & upload the video for you.\n\n"
+        "✅ <b>Supported link formats</b>\n"
         "• Links containing `/s/`\n"
         "• Links containing `?surl=`\n\n"
         "⚡ Fast • Reliable • Free\n"
-        "🚀 Powered by **@Thestarbots**"
+        "🚀 Powered by <b>@Thestarbots</b>"
     )
     
     try:
@@ -59,16 +59,16 @@ async def cmd_start(message: Message):
             await message.answer_photo(
                 photo=welcome_photo,
                 caption=welcome_caption,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
         else:
             # Fallback to text-only if no photo configured
-            await message.answer(welcome_caption, parse_mode="Markdown")
+            await message.answer(welcome_caption, parse_mode="HTML")
             
     except Exception as e:
         # Fallback to text-only if photo fails
         log.debug(f"Could not send welcome photo: {e}")
-        await message.answer(welcome_caption, parse_mode="Markdown")
+        await message.answer(welcome_caption, parse_mode="HTML")
 
 
 @dp.callback_query(F.data == "check_subscription")
@@ -76,19 +76,19 @@ async def callback_check_subscription(callback: CallbackQuery):
     """Handle subscription check callback."""
     if await check_user_subscription(bot, callback.from_user.id):
         welcome_text = (
-        "✨ **Welcome to TeraBox Downloader Bot** ✨\n\n"
-        "📥 Send me a **TeraBox link** and I'll download & upload the video for you.\n\n"
-        "✅ **Supported link formats**\n"
+        "✨ <b>Welcome to TeraBox Downloader Bot</b> ✨\n\n"
+        "📥 Send me a <b>TeraBox link</b> and I'll download & upload the video for you.\n\n"
+        "✅ <b>Supported link formats</b>\n"
         "• Links containing `/s/`\n"
         "• Links containing `?surl=`\n\n"
         "⚡ Fast • Reliable • Free\n"
-        "🚀 Powered by **@Thestarbots**"
+        "🚀 Powered by <b>@Thestarbots</b>"
         )
         welcome_photo = getattr(settings, 'welcome_photo_url', None)
         if welcome_photo:
-            await callback.message.edit_photo(photo=welcome_photo, caption=welcome_text, parse_mode="Markdown")
+            await callback.message.edit_photo(photo=welcome_photo, caption=welcome_text, parse_mode="HTML")
         else:
-            await callback.message.edit_text(welcome_text, parse_mode="Markdown")
+            await callback.message.edit_text(welcome_text, parse_mode="HTML")
     else:
         await callback.answer("❌ You haven't joined the channel yet!", show_alert=True)
     await callback.answer()

@@ -59,16 +59,32 @@ class JobQueue:
     
     async def consume_jobs(self, callback: Callable, stop_event: Optional[asyncio.Event] = None):
         """
-        Consume jobs from the queue and process them.
+        Consume jobs from the queue and process them in parallel.
         
         This is a blocking operation that runs until stop_event is set.
+        Uses semaphore to limit concurrent job processing.
         
         Args:
             callback: Async function to call with job data
             stop_event: Event to signal when to stop consuming
         """
+        from config.settings import settings
+        
         redis = get_redis()
         log.info(f"Starting job consumer for queue: {self.queue_name}")
+        log.info(f"Max concurrent downloads: {settings.max_concurrent_downloads}")
+        
+        # Semaphore to limit concurrent job processing
+        semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
+        active_tasks = set()
+        
+        async def process_with_semaphore(job_data: Dict[str, Any]):
+            """Process a job with semaphore control."""
+            async with semaphore:
+                try:
+                    await callback(job_data)
+                except Exception as e:
+                    log.error(f"Error processing job: {e}")
         
         while stop_event is None or not stop_event.is_set():
             try:
@@ -83,12 +99,12 @@ class JobQueue:
                     
                     log.info(f"Consumed job: user_id={job_data.get('user_id')}, hash={job_data.get('link_hash')}")
                     
-                    # Process job with callback
-                    try:
-                        await callback(job_data)
-                    except Exception as e:
-                        log.error(f"Error processing job: {e}")
-                        # Job is lost if processing fails (consider dead letter queue for production)
+                    # Create task for parallel processing
+                    task = asyncio.create_task(process_with_semaphore(job_data))
+                    active_tasks.add(task)
+                    task.add_done_callback(active_tasks.discard)
+                    
+                    log.info(f"Active parallel tasks: {len(active_tasks)}/{settings.max_concurrent_downloads}")
                 
             except asyncio.CancelledError:
                 log.info("Job consumer cancelled")
@@ -96,6 +112,11 @@ class JobQueue:
             except Exception as e:
                 log.error(f"Error in job consumer: {e}")
                 await asyncio.sleep(1)  # Avoid tight loop on errors
+        
+        # Wait for all active tasks to complete before shutting down
+        if active_tasks:
+            log.info(f"Waiting for {len(active_tasks)} active tasks to complete...")
+            await asyncio.gather(*active_tasks, return_exceptions=True)
         
         log.info("Job consumer stopped")
     

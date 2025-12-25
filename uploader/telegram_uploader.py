@@ -4,7 +4,7 @@ Handles video upload to log channel and forwarding to users.
 """
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
-from pyrogram import Client
+from pyrogram import Client, enums
 from pyrogram.errors import FloodWait, PeerIdInvalid, ChannelPrivate, ChatWriteForbidden
 from pyrogram.types import Message
 from uploader.multi_bot_manager import multi_bot_manager
@@ -160,10 +160,10 @@ class TelegramUploader:
                 
                 # Create caption with file info and deletion notice
                 caption = (
-                    f"🎬 **{file_name}**\n\n"
+                    f"🎬 <b>{file_name}</b>\n\n"
                     f"⏱ Duration: {duration}\n"
                     f"📦 Size: {file_size_readable}\n\n"
-                    f"⚠️ **Note:** Video will be auto-deleted after 1 hour"
+                    f"⚠️ <b>Note:</b> Video will be auto-deleted after 1 hour"
                 )
                 
                 # Upload to log channel
@@ -172,7 +172,7 @@ class TelegramUploader:
                     chat_id=settings.log_channel_id,
                     video=str(file_path),
                     caption=caption,
-                    parse_mode="Markdown",  # Enable markdown formatting for bold text
+                    parse_mode=enums.ParseMode.HTML,  # Enable HTML formatting for bold text
                     supports_streaming=True,  # Enable streaming for better playback
                     progress=progress_callback
                 )

@@ -80,14 +80,20 @@ class JobQueue:
         
         async def process_with_semaphore(job_data: Dict[str, Any]):
             """Process a job with semaphore control."""
-            async with semaphore:
-                try:
-                    await callback(job_data)
-                except Exception as e:
-                    log.error(f"Error processing job: {e}")
+            try:
+                await callback(job_data)
+            except Exception as e:
+                log.error(f"Error processing job: {e}")
+            finally:
+                # Release semaphore when done
+                semaphore.release()
         
         while stop_event is None or not stop_event.is_set():
             try:
+                # CRITICAL: Acquire semaphore BEFORE consuming job
+                # This prevents consuming more jobs than we can process
+                await semaphore.acquire()
+                
                 # BRPOP with timeout (blocking pop from right)
                 result = await redis.brpop(self.queue_name, timeout=WORKER_POLL_INTERVAL)
                 
@@ -100,17 +106,26 @@ class JobQueue:
                     log.info(f"Consumed job: user_id={job_data.get('user_id')}, hash={job_data.get('link_hash')}")
                     
                     # Create task for parallel processing
+                    # Semaphore is already acquired, so this won't exceed limit
                     task = asyncio.create_task(process_with_semaphore(job_data))
                     active_tasks.add(task)
                     task.add_done_callback(active_tasks.discard)
                     
                     log.info(f"Active parallel tasks: {len(active_tasks)}/{settings.max_concurrent_downloads}")
+                else:
+                    # No job available, release semaphore
+                    semaphore.release()
                 
             except asyncio.CancelledError:
                 log.info("Job consumer cancelled")
                 break
             except Exception as e:
                 log.error(f"Error in job consumer: {e}")
+                # Release semaphore on error
+                try:
+                    semaphore.release()
+                except:
+                    pass
                 await asyncio.sleep(1)  # Avoid tight loop on errors
         
         # Wait for all active tasks to complete before shutting down

@@ -28,7 +28,7 @@ dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    """Handle /start command."""
+    """Handle /start command with premium welcome message and photo."""
     # Check force subscribe
     if not await check_user_subscription(bot, message.from_user.id):
         keyboard = await get_force_subscribe_keyboard()
@@ -38,25 +38,53 @@ async def cmd_start(message: Message):
         )
         return
     
-    welcome_text = """
-👋 Welcome to TeraBox Downloader Bot!
-
-📥 Send me a TeraBox link and I'll download and upload the video for you.
-
-✅ Valid link formats:
-• Links containing /s/
-• Links containing ?surl=
-
-⚡️ Fast, reliable, and free!
-"""
-    await message.answer(welcome_text)
+    # Premium welcome message
+    welcome_caption = (
+        "✨ **Welcome to TeraBox Downloader Bot** ✨\n\n"
+        "📥 Send me a **TeraBox link** and I'll download & upload the video for you.\n\n"
+        "✅ **Supported link formats**\n"
+        "• Links containing `/s/`\n"
+        "• Links containing `?surl=`\n\n"
+        "⚡ Fast • Reliable • Free\n"
+        "🚀 Powered by **@Thestarbots**"
+    )
+    
+    try:
+        # Try to send with photo/GIF
+        # You can configure this path in settings or use a URL
+        welcome_photo = getattr(settings, 'welcome_photo_url', None)
+        
+        if welcome_photo:
+            # Send photo with caption
+            await message.answer_photo(
+                photo=welcome_photo,
+                caption=welcome_caption,
+                parse_mode="Markdown"
+            )
+        else:
+            # Fallback to text-only if no photo configured
+            await message.answer(welcome_caption, parse_mode="Markdown")
+            
+    except Exception as e:
+        # Fallback to text-only if photo fails
+        log.debug(f"Could not send welcome photo: {e}")
+        await message.answer(welcome_caption, parse_mode="Markdown")
 
 
 @dp.callback_query(F.data == "check_subscription")
 async def callback_check_subscription(callback: CallbackQuery):
     """Handle subscription check callback."""
     if await check_user_subscription(bot, callback.from_user.id):
-        await callback.message.edit_text("✅ Thank you for joining! You can now use the bot.\n\nSend me a TeraBox link to get started.")
+        welcome_text = (
+            "✨ **Welcome to TeraBox Downloader Bot** ✨\n\n"
+            "📥 Send me a **TeraBox link** and I'll handle the rest.\n\n"
+            "🎬 You'll get:\n"
+            "• High quality videos\n"
+            "• Fast download & upload\n"
+            "• Clean progress updates\n\n"
+            "⚡ Powered by **@Thestarbots**"
+        )
+        await callback.message.edit_text(welcome_text, parse_mode="Markdown")
     else:
         await callback.answer("❌ You haven't joined the channel yet!", show_alert=True)
     await callback.answer()
@@ -97,7 +125,8 @@ async def handle_message(message: Message):
             log.info(f"Duplicate link detected: hash={link_hash}")
             
             # Send duplicate message
-            await message.answer(MSG_DUPLICATE_FOUND)
+            # Send cached video info message
+            cache_msg = await message.answer(MSG_DUPLICATE_FOUND)
             
             # Forward existing video from log channel
             channel_message_id = existing_video.get('channel_message_id')
@@ -108,7 +137,18 @@ async def handle_message(message: Message):
                     channel_message_id=channel_message_id
                 )
                 
-                if not success:
+                if success:
+                    # Clean up cache info message after video is sent
+                    try:
+                        await cache_msg.delete()
+                        log.info(f"[USER] CACHE_MSG_DELETED | chat_id={message.chat.id} | msg_id={cache_msg.message_id}")
+                    except Exception as e:
+                        log.debug(f"Could not delete cache message: {e}")
+                    
+                    # Schedule auto-delete for the video (1 hour)
+                    # Note: forward_existing_video should return the sent message for this to work
+                    # For now, we'll add this in telegram_uploader.py
+                else:
                     await message.answer(ERROR_PROCESSING)
             else:
                 log.error(f"No channel_message_id found for hash: {link_hash}")

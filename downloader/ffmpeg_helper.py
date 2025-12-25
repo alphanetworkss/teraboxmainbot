@@ -225,5 +225,81 @@ class FFmpegHelper:
                 return None
 
 
+
+    async def embed_thumbnail(
+        self,
+        video_path: Path,
+        thumb_path: Path,
+        output_path: Path
+    ) -> Optional[Path]:
+        """
+        Embed thumbnail into video file using ffmpeg (no re-encoding).
+        
+        Uses stream copy to preserve original video/audio quality.
+        Supports MP4 (attached_pic) and MKV (attach) formats.
+        
+        Args:
+            video_path: Input video file
+            thumb_path: Thumbnail image file (JPG)
+            output_path: Output video file with embedded thumbnail
+            
+        Returns:
+            Path to output video if successful, None otherwise
+        """
+        try:
+            # Detect video format
+            video_ext = video_path.suffix.lower()
+            
+            if video_ext in ['.mp4', '.m4v']:
+                # MP4 format - use attached_pic disposition
+                cmd = [
+                    'ffmpeg',
+                    '-y',  # Overwrite output
+                    '-i', str(video_path),
+                    '-i', str(thumb_path),
+                    '-map', '0',  # Map all streams from first input
+                    '-map', '1',  # Map thumbnail from second input
+                    '-c', 'copy',  # Copy all streams (no re-encoding)
+                    '-disposition:v:1', 'attached_pic',  # Mark second video stream as thumbnail
+                    str(output_path)
+                ]
+            elif video_ext in ['.mkv', '.webm']:
+                # MKV format - use attach
+                cmd = [
+                    'ffmpeg',
+                    '-y',  # Overwrite output
+                    '-i', str(video_path),
+                    '-attach', str(thumb_path),  # Attach thumbnail
+                    '-metadata:s:t', 'mimetype=image/jpeg',  # Set MIME type
+                    '-c', 'copy',  # Copy all streams (no re-encoding)
+                    str(output_path)
+                ]
+            else:
+                log.warning(f"[THUMB] UNSUPPORTED_FORMAT | ext={video_ext} | Supported: .mp4, .mkv")
+                return None
+            
+            log.info(f"[THUMB] EMBEDDING | video={video_path.name} | thumb={thumb_path.name}")
+            
+            # Run ffmpeg
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                log.info(f"[THUMB] EMBEDDED | file={output_path.name}")
+                return output_path
+            else:
+                error_msg = stderr.decode('utf-8', errors='ignore')
+                log.error(f"[THUMB] EMBED_FAILED | returncode={process.returncode} | error={error_msg[:200]}")
+                return None
+                
+        except Exception as e:
+            log.error(f"[THUMB] EMBED_ERROR | error={type(e).__name__}: {e}")
+            return None
+
 # Global FFmpeg helper instance
 ffmpeg_helper = FFmpegHelper()

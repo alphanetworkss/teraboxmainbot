@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     log_channel_id: int = Field(..., env='LOG_CHANNEL_ID')
     force_subscribe_channel_id: str | int = Field('0', env='FORCE_SUBSCRIBE_CHANNEL_ID')  # Can be username (@channel) or ID (-100xxx)
     
+    # Welcome Message Configuration
+    welcome_photo_url: str = Field('', env='WELCOME_PHOTO_URL')  # Optional: URL or file_id for welcome photo/GIF
+    
     # Database Configuration
     mongodb_uri: str = Field('mongodb://localhost:27017', env='MONGODB_URI')
     mongodb_db_name: str = Field('terabox_bot', env='MONGODB_DB_NAME')

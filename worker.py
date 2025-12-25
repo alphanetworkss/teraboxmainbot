@@ -36,9 +36,9 @@ stop_event = asyncio.Event()
 worker_bot: Bot = None
 
 
-async def fetch_m3u8_from_api(link: str) -> str | None:
+async def fetch_m3u8_from_api(link: str) -> tuple[str, dict] | tuple[None, None]:
     """
-    Fetch M3U8 URL from Starbots TeraBox API.
+    Fetch M3U8 URL and file metadata from Starbots TeraBox API.
     
     API Response Format:
     {
@@ -46,9 +46,12 @@ async def fetch_m3u8_from_api(link: str) -> str | None:
         "data": {
             "file": {
                 "file_name": "...",
-                "stream_url": "http://api.starbots.in/play/i/...",  # This is the M3U8 URL
+                "stream_url": "http://api.starbots.in/play/i/...",
+                "thumb": "https://...",
+                "duration": "01:09:15",
+                "quality": "720p",
                 "size": 123456,
-                ...
+                "size_readable": "393.83 MB"
             }
         }
     }
@@ -57,7 +60,8 @@ async def fetch_m3u8_from_api(link: str) -> str | None:
         link: TeraBox link
         
     Returns:
-        M3U8 URL (stream_url) if successful, None otherwise
+        Tuple of (stream_url, file_metadata) if successful, (None, None) otherwise
+        file_metadata contains: file_name, duration, quality, thumb, size_readable
     """
     try:
         log.info(f"Fetching M3U8 URL from Starbots API: {link}")
@@ -76,25 +80,38 @@ async def fetch_m3u8_from_api(link: str) -> str | None:
                     
                     # Check if API returned success
                     if data.get('errno') == 0:
-                        # Extract stream_url from response
-                        stream_url = data.get('data', {}).get('file', {}).get('stream_url')
+                        # Extract file data
+                        file_data = data.get('data', {}).get('file', {})
+                        stream_url = file_data.get('stream_url')
                         
                         if stream_url:
                             log.info(f"Got M3U8 URL from Starbots API: {stream_url}")
-                            return stream_url
+                            
+                            # Extract file metadata
+                            file_metadata = {
+                                'file_name': file_data.get('file_name', 'Unknown'),
+                                'duration': file_data.get('duration', 'N/A'),
+                                'quality': file_data.get('quality', 'N/A'),
+                                'thumb': file_data.get('thumb', ''),
+                                'size_readable': file_data.get('size_readable', 'N/A')
+                            }
+                            
+                            log.info(f"File metadata: {file_metadata['file_name']} | {file_metadata['duration']} | {file_metadata['quality']}")
+                            
+                            return stream_url, file_metadata
                         else:
                             log.error(f"No stream_url in API response: {data}")
-                            return None
+                            return None, None
                     else:
                         log.error(f"API returned error: errno={data.get('errno')}, data={data}")
-                        return None
+                        return None, None
                 else:
                     log.error(f"API request failed: status={response.status}")
-                    return None
+                    return None, None
                     
     except Exception as e:
         log.error(f"Error fetching M3U8 from Starbots API: {e}")
-        return None
+        return None, None
 
 
 async def send_progress_message(chat_id: int, message_id: int, text: str):
@@ -107,6 +124,74 @@ async def send_progress_message(chat_id: int, message_id: int, text: str):
         )
     except Exception as e:
         log.debug(f"Could not update progress message: {e}")
+
+
+
+async def delete_progress_message(chat_id: int, message_id: int):
+    """
+    Delete progress message from user chat.
+    
+    Args:
+        chat_id: User chat ID
+        message_id: Progress message ID to delete
+    """
+    try:
+        await worker_bot.delete_message(chat_id, message_id)
+        log.info(f"[USER] PROGRESS_MSG_DELETED | chat_id={chat_id} | msg_id={message_id}")
+    except Exception as e:
+        # Message may already be deleted by user - this is OK
+        log.debug(f"Could not delete progress message {message_id}: {e}")
+
+
+async def cleanup_user_messages(chat_id: int, progress_msg_id: int = None, cache_msg_id: int = None):
+    """
+    Clean up temporary messages from user chat.
+    
+    Args:
+        chat_id: User chat ID
+        progress_msg_id: Progress message ID (optional)
+        cache_msg_id: Cached video info message ID (optional)
+    """
+    if progress_msg_id:
+        await delete_progress_message(chat_id, progress_msg_id)
+    
+    if cache_msg_id:
+        try:
+            await worker_bot.delete_message(chat_id, cache_msg_id)
+            log.info(f"[USER] CACHE_MSG_DELETED | chat_id={chat_id} | msg_id={cache_msg_id}")
+        except Exception as e:
+            log.debug(f"Could not delete cache message {cache_msg_id}: {e}")
+
+
+def schedule_video_auto_delete(chat_id: int, message_id: int, delay: int = 3600):
+    """
+    Schedule auto-deletion of video message from user chat (NOT channel).
+    
+    Args:
+        chat_id: User chat ID
+        message_id: Video message ID to delete
+        delay: Delay in seconds (default 3600 = 1 hour)
+    """
+    async def delete_after_delay():
+        try:
+            log.info(
+                f"[USER] AUTO_DELETE_SCHEDULED | "
+                f"chat_id={chat_id} | "
+                f"msg_id={message_id} | "
+                f"in={delay}s"
+            )
+            
+            await asyncio.sleep(delay)
+            
+            await worker_bot.delete_message(chat_id, message_id)
+            
+            log.info(f"[USER] AUTO_DELETE_DONE | chat_id={chat_id} | msg_id={message_id}")
+        except Exception as e:
+            # Silent failure - user may have deleted manually
+            log.debug(f"Could not auto-delete video {message_id}: {e}")
+    
+    # Create background task (non-blocking)
+    asyncio.create_task(delete_after_delay())
 
 
 # Removed: progress_bar, format_bytes, format_time now imported from utils.progress_tracker
@@ -130,12 +215,15 @@ async def process_job(job_data: Dict[str, Any]):
     file_path = None
     
     try:
-        # Step 1: Fetch M3U8 URL from API
-        m3u8_url = await fetch_m3u8_from_api(link)
+        # Step 1: Fetch M3U8 URL and file metadata from API
+        m3u8_url, file_metadata = await fetch_m3u8_from_api(link)
         
         if not m3u8_url:
             await worker_bot.send_message(chat_id, ERROR_DOWNLOAD_FAILED)
             return
+        
+        # Store file metadata in job_data for use in progress messages and upload
+        job_data['file_metadata'] = file_metadata
         
         # Step 2: Parse M3U8 and get best quality
         best_quality_url = await m3u8_parser.get_best_quality(m3u8_url)
@@ -174,14 +262,24 @@ async def process_job(job_data: Dict[str, Any]):
             # Create progress bar (10 chars as shown in example)
             bar = progress_bar.generate(percentage, length=10)
             
-            # Format message with download speed in MB/s
+            # Get file metadata
+            file_name = file_metadata.get('file_name', 'Unknown')
+            duration = file_metadata.get('duration', 'N/A')
+            quality = file_metadata.get('quality', 'N/A')
+            size_readable = file_metadata.get('size_readable', 'N/A')
+            
+            # Format message with file metadata and download speed in MB/s
             progress_text = (
-                "📥 **Downloading (Stream → MP4)**\n\n"
-                "╭━━━━❰Progress❱━━━━➣\n"
-                f"┣⪼ [{bar}] {percentage:.1f}%\n"
-                f"┣⪼ 🚀 Speed: {download_speed}\n"
-                f"┣⪼ ⏱️ ETA: {eta}\n"
-                "╰━━━━━━━━━━━━━━━➣"
+                "📥 **Download Progress**\n\n"
+                f"🎬 File: {file_name}\n"
+                f"⏱ Duration: {duration}\n"
+                f"🎞 Quality: {quality}\n\n"
+                "━━━━━━━━━━━━━━\n"
+                f"{bar} {percentage:.1f}%\n"
+                "━━━━━━━━━━━━━━\n\n"
+                f"📦 Size: {size_readable}\n"
+                f"🚀 Speed: {download_speed}\n"
+                f"⏱️ ETA: {eta}"
             )
             
             await send_progress_message(chat_id, progress_message_id, progress_text)
@@ -221,6 +319,47 @@ async def process_job(job_data: Dict[str, Any]):
         progress_logger.log_download_complete(link_hash, download_duration, file_size)
         
         log.info(f"Download completed: {downloaded_file}")
+        
+        # Step 4.5: Embed thumbnail into video (if available)
+        thumb_url = file_metadata.get('thumb', '')
+        thumb_path = None
+        original_video = downloaded_file
+        
+        if thumb_url:
+            try:
+                # Import thumbnail helper
+                from downloader.thumbnail_helper import download_thumbnail
+                
+                # Create temp paths
+                thumb_path = file_path.parent / f"thumb_{link_hash}.jpg"
+                video_with_thumb = file_path.parent / f"final_{link_hash}{downloaded_file.suffix}"
+                
+                # Download thumbnail
+                log.info(f"[THUMB] Starting thumbnail download")
+                downloaded_thumb = await download_thumbnail(thumb_url, thumb_path)
+                
+                if downloaded_thumb:
+                    # Embed thumbnail into video
+                    log.info(f"[THUMB] Starting thumbnail embedding")
+                    final_video = await ffmpeg_helper.embed_thumbnail(
+                        video_path=downloaded_file,
+                        thumb_path=downloaded_thumb,
+                        output_path=video_with_thumb
+                    )
+                    
+                    if final_video and final_video.exists():
+                        # Success - use video with embedded thumbnail
+                        downloaded_file = final_video
+                        log.info(f"[THUMB] SUCCESS | Using video with embedded thumbnail")
+                    else:
+                        log.warning(f"[THUMB] FALLBACK | Embedding failed, using original video")
+                else:
+                    log.warning(f"[THUMB] FALLBACK | Thumbnail download failed, using original video")
+                    
+            except Exception as e:
+                log.error(f"[THUMB] ERROR | {type(e).__name__}: {e} | Using original video")
+        else:
+            log.info(f"[THUMB] SKIP | No thumbnail URL provided")
         
         # Step 5: Upload to Telegram
         log.info(f"Uploading video to Telegram")
@@ -262,15 +401,23 @@ async def process_job(job_data: Dict[str, Any]):
             current_mb = current / (1024 * 1024)
             total_mb = total / (1024 * 1024)
             
-            # Format message
+            # Get file metadata
+            file_name = file_metadata.get('file_name', 'Unknown')
+            duration = file_metadata.get('duration', 'N/A')
+            quality = file_metadata.get('quality', 'N/A')
+            
+            # Format message with file metadata
             progress_text = (
-                "📤 **Uploading to Channel**\n\n"
-                "╭━━━━❰Progress❱━━━━➣\n"
-                f"┣⪼ [{bar}] {percent:.1f}%\n"
-                f"┣⪼ 📦 Uploaded: {current_mb:.1f}MB / {total_mb:.1f}MB\n"
-                f"┣⪼ 🚀 Speed: {speed}\n"
-                f"┣⪼ ⏱️ ETA: {eta}\n"
-                "╰━━━━━━━━━━━━━━━➣"
+                "📤 **Upload Progress**\n\n"
+                f"🎬 File: {file_name}\n"
+                f"⏱ Duration: {duration}\n"
+                f"🎞 Quality: {quality}\n\n"
+                "━━━━━━━━━━━━━━\n"
+                f"{bar} {percent:.1f}%\n"
+                "━━━━━━━━━━━━━━\n\n"
+                f"📦 Uploaded: {current_mb:.1f} MB / {total_mb:.1f} MB\n"
+                f"🚀 Speed: {speed}\n"
+                f"⏱️ ETA: {eta}"
             )
             
             await send_progress_message(chat_id, progress_message_id, progress_text)
@@ -291,6 +438,23 @@ async def process_job(job_data: Dict[str, Any]):
             progress_logger.log_upload_error(link_hash, "Upload failed", bot_index=0)
             await worker_bot.send_message(chat_id, ERROR_UPLOAD_FAILED)
             return
+        
+        # Delete progress message from user chat
+        await delete_progress_message(chat_id, progress_message_id)
+        
+        # Cleanup temporary files
+        try:
+            # Delete thumbnail file if it exists
+            if thumb_path and thumb_path.exists():
+                thumb_path.unlink()
+                log.info(f"[THUMB] CLEANUP_DONE | Deleted thumbnail: {thumb_path.name}")
+            
+            # If we created a new video with embedded thumb, delete original
+            if downloaded_file != original_video and original_video.exists():
+                original_video.unlink()
+                log.info(f"[THUMB] CLEANUP_DONE | Deleted original video: {original_video.name}")
+        except Exception as e:
+            log.warning(f"[THUMB] CLEANUP_ERROR | {type(e).__name__}: {e}")
         
         # Cleanup rate limiter
         rate_limiter.reset(link_hash)

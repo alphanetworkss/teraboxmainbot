@@ -13,6 +13,54 @@ from config.settings import settings
 from utils.logger import log
 from utils.progress_tracker import progress_logger
 from uploader.chat_validator import validate_chat_access, format_validation_error
+import asyncio
+
+
+
+def schedule_user_video_delete(bot, chat_id: int, message_id: int, delay: int = 3600):
+    """
+    Schedule deletion of user video after delay (bot chat only, NOT channel).
+    
+    Args:
+        bot: Bot instance
+        chat_id: User chat ID (NOT channel)
+        message_id: Message ID to delete
+        delay: Delay in seconds (default 3600 = 1 hour)
+    """
+    async def delete_after_delay():
+        try:
+            # CRITICAL SAFETY CHECK - never delete from channel
+            if chat_id == settings.log_channel_id:
+                log.error(
+                    f"CRITICAL: Attempted to delete channel message {message_id}! "
+                    f"This should NEVER happen. Aborting deletion."
+                )
+                return
+            
+            log.info(
+                f"[USER] AUTO_DELETE_SCHEDULED | "
+                f"chat_id={chat_id} | "
+                f"msg_id={message_id} | "
+                f"delete_in={delay}s"
+            )
+            
+            # Wait for delay (non-blocking)
+            await asyncio.sleep(delay)
+            
+            # Delete message from user chat
+            await bot.delete_message(chat_id, message_id)
+            
+            log.info(
+                f"[USER] AUTO_DELETE_DONE | "
+                f"chat_id={chat_id} | "
+                f"msg_id={message_id}"
+            )
+        except Exception as e:
+            # Silent failure - user may have deleted manually
+            log.debug(f"Could not auto-delete user message {message_id}: {e}")
+    
+    # Create background task (non-blocking)
+    asyncio.create_task(delete_after_delay())
 
 
 class TelegramUploader:
@@ -104,11 +152,27 @@ class TelegramUploader:
                 # Bot has access - proceed with upload
                 log.info(f"Bot {bot_index} validated for channel access, proceeding with upload")
                 
+                # Get file metadata for caption
+                file_metadata = job_data.get('file_metadata', {})
+                file_name = file_metadata.get('file_name', 'Unknown')
+                duration = file_metadata.get('duration', 'N/A')
+                file_size_readable = file_metadata.get('size_readable', 'N/A')
+                
+                # Create caption with file info and deletion notice
+                caption = (
+                    f"🎬 **{file_name}**\n\n"
+                    f"⏱ Duration: {duration}\n"
+                    f"📦 Size: {file_size_readable}\n\n"
+                    f"⚠️ **Note:** Video will be auto-deleted after 1 hour"
+                )
+                
                 # Upload to log channel
+                # Note: Thumbnail is now embedded in video file, no need to pass thumb parameter
                 message: Message = await client.send_video(
                     chat_id=settings.log_channel_id,
                     video=str(file_path),
-                    caption=f"🔗 Link: {job_data['link']}\n📦 Hash: {job_data['link_hash'][:16]}...",
+                    caption=caption,
+                    supports_streaming=True,  # Enable streaming for better playback
                     progress=progress_callback
                 )
                 
@@ -134,14 +198,49 @@ class TelegramUploader:
                     main_bot = Bot(token=settings.main_bot_token)
                     
                     # Copy message instead of forwarding to remove "Forwarded from" attribution
-                    await main_bot.copy_message(
+                    user_message = await main_bot.copy_message(
                         chat_id=job_data['chat_id'],
                         from_chat_id=settings.log_channel_id,
                         message_id=message.id
                     )
                     
                     await main_bot.session.close()
-                    log.info(f"Video sent to user from main bot: user_id={job_data['user_id']}")
+                    
+                    log.info(
+                        f"[USER] VIDEO_SENT | "
+                        f"chat_id={job_data['chat_id']} | "
+                        f"msg_id={user_message.message_id} | "
+                        f"source=fresh"
+                    )
+                    
+                    # Schedule auto-delete (1 hour) - BOT CHAT ONLY
+                    async def delete_after_delay():
+                        try:
+                            log.info(
+                                f"[USER] AUTO_DELETE_SCHEDULED | "
+                                f"chat_id={job_data['chat_id']} | "
+                                f"msg_id={user_message.message_id} | "
+                                f"in=3600s"
+                            )
+                            
+                            await asyncio.sleep(3600)  # 1 hour
+                            
+                            # Recreate bot instance for deletion
+                            from aiogram import Bot
+                            delete_bot = Bot(token=settings.main_bot_token)
+                            await delete_bot.delete_message(job_data['chat_id'], user_message.message_id)
+                            await delete_bot.session.close()
+                            
+                            log.info(
+                                f"[USER] AUTO_DELETE_DONE | "
+                                f"chat_id={job_data['chat_id']} | "
+                                f"msg_id={user_message.message_id}"
+                            )
+                        except Exception as e:
+                            log.debug(f"Could not auto-delete fresh video {user_message.message_id}: {e}")
+                    
+                    # Create background task (non-blocking)
+                    asyncio.create_task(delete_after_delay())
                     
                     # Log upload completion (note: duration calculation would require tracking start time)
                     # For now, we log completion without duration
